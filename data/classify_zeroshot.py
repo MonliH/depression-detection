@@ -19,7 +19,7 @@ comments["train"] = comments["train"].remove_columns(cols_to_remove)
 logits = []
 pipe = pipeline("zero-shot-classification", model="MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli", tokenizer=deberta_tok, device=0)
 labels = ["about the speaker being diagnosed with depression", "other"]
-for out in tqdm(pipe(KeyDataset(comments["train"], "body"), candidate_labels=labels, multi_label=False, batch_size=32), total=1000):
+for out in tqdm(pipe(KeyDataset(comments["train"], "body"), candidate_labels=labels, multi_label=False, batch_size=32), total=len(comments["train"])):
     logit = out["scores"]
     if out["labels"][0][0] == "o":
         logit = list(reversed(logit))

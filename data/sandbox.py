@@ -2,6 +2,7 @@ import datasets
 import numpy as np
 import json
 
+
 d = datasets.load_from_disk("./output/processed_deberta")
 def process_logit(examples):
     examples["class"] = np.argmax(examples["logits"], axis=1).tolist()
