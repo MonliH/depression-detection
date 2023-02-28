@@ -9,7 +9,7 @@ depressed_users = json.load(open("./output/depressed_comments_by_user.json", "r"
 non_depressed_users = json.load(open("./output/non_depressed_comments_by_user.json", "r"))
 
 usernames_to_avoid = set(k.lower() for k in non_depressed_users.keys()).union(k.lower() for k in set(depressed_users.keys()))
-all_usernames = pd.read_csv("output/users.csv")
+all_usernames = pd.read_csv("output/users.csv")[::-1]
 
 print(len(usernames_to_avoid), "usernames to avoid")
 
