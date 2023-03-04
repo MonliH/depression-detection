@@ -1,0 +1,6 @@
+[DEFAULT]
+client_id=<something>
+client_secret=<something>
+user_agent=<platform>:<id>:v<version> (by /u/<user>)
+username=<user>
+password=<password>
