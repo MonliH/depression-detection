@@ -3,3 +3,4 @@ output/*
 neg.txt
 pos.txt
 checkpoints/
+wandb/

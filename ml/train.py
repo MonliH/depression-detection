@@ -35,7 +35,7 @@ from transformers import (
     HfArgumentParser,
     PretrainedConfig,
     TrainingArguments,
-    is_tensorboard_available,
+    is_wandb_available,
 )
 from transformers.utils import check_min_version, get_full_repo_name, send_example_telemetry
 
@@ -81,10 +81,6 @@ class ModelArguments:
         default=False,
         metadata={"help": "If passed, will use a slow tokenizer (not backed by the 🤗 Tokenizers library)."},
     )
-    cache_dir: Optional[str] = field(
-        default=None,
-        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
-    )
     model_revision: str = field(
         default="main",
         metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
@@ -105,7 +101,9 @@ class DataTrainingArguments:
     """
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
-
+    report_to_wandb: Optional[str] = field(
+        default=None, metadata={"help": f"Wandb entity/project/run-name to use."}
+    )
     task_name: Optional[str] = field(
         default=None, metadata={"help": f"The name of the glue task to train on. choices {list(task_to_keys.keys())}"}
     )
@@ -114,6 +112,9 @@ class DataTrainingArguments:
     )
     train_file: Optional[str] = field(
         default=None, metadata={"help": "The input training data file (a csv or JSON file)."}
+    )
+    load_dataset_from_disk: Optional[str] = field(
+        default=None, metadata={"help": "The dataset to load from disk."}
     )
     validation_file: Optional[str] = field(
         default=None,
@@ -128,9 +129,6 @@ class DataTrainingArguments:
     )
     label_column_name: Optional[str] = field(
         default=None, metadata={"help": "The column name of label to input in the file (a csv or JSON file)."}
-    )
-    overwrite_cache: bool = field(
-        default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     preprocessing_num_workers: Optional[int] = field(
         default=None,
@@ -174,8 +172,8 @@ class DataTrainingArguments:
     )
 
     def __post_init__(self):
-        if self.task_name is None and self.train_file is None and self.validation_file is None:
-            raise ValueError("Need either a dataset name or a training/validation file.")
+        if self.task_name is None and self.train_file is None and self.validation_file is None and self.load_dataset_from_disk is None:
+            raise ValueError("Need either a dataset name or a training/validation file or load_dataset_from_disk.")
         else:
             if self.train_file is not None:
                 extension = self.train_file.split(".")[-1]
@@ -351,48 +349,13 @@ def main():
 
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
-    if data_args.task_name is not None:
-        # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(
-            "glue",
-            data_args.task_name,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
-    else:
-        # Loading the dataset from local csv or json file.
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-        extension = (data_args.train_file if data_args.train_file is not None else data_args.valid_file).split(".")[-1]
-        raw_datasets = load_dataset(
-            extension,
-            data_files=data_files,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
+    raw_datasets = datasets.load_from_disk(data_args.load_dataset_from_disk)
     # See more about loading any type of standard or custom dataset at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
     # Labels
-    if data_args.task_name is not None:
-        is_regression = data_args.task_name == "stsb"
-        if not is_regression:
-            label_list = raw_datasets["train"].features["label"].names
-            num_labels = len(label_list)
-        else:
-            num_labels = 1
-    else:
-        # Trying to have good defaults here, don't hesitate to tweak to your needs.
-        is_regression = raw_datasets["train"].features["label"].dtype in ["float32", "float64"]
-        if is_regression:
-            num_labels = 1
-        else:
-            # A useful fast method:
-            # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.unique
-            label_list = raw_datasets["train"].unique("label")
-            label_list.sort()  # Let's sort it for determinism
-            num_labels = len(label_list)
+    num_labels = 2
+    is_regression = False
 
     # Load pretrained model and tokenizer
     config = AutoConfig.from_pretrained(
@@ -412,107 +375,37 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
 
-    # Preprocessing the datasets
-    if data_args.task_name is not None:
-        sentence1_key, sentence2_key = task_to_keys[data_args.task_name]
-    else:
-        # Again, we try to have some nice defaults but don't hesitate to tweak to your use case.
-        non_label_column_names = [name for name in raw_datasets["train"].column_names if name != "label"]
-        if "sentence1" in non_label_column_names and "sentence2" in non_label_column_names:
-            sentence1_key, sentence2_key = "sentence1", "sentence2"
-        else:
-            if len(non_label_column_names) >= 2:
-                sentence1_key, sentence2_key = non_label_column_names[:2]
-            else:
-                sentence1_key, sentence2_key = non_label_column_names[0], None
-
-    # Some models have set the order of the labels to use, so let's make sure we do use it.
-    label_to_id = None
-    if (
-        model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id
-        and data_args.task_name is not None
-        and not is_regression
-    ):
-        # Some have all caps in their config, some don't.
-        label_name_to_id = {k.lower(): v for k, v in model.config.label2id.items()}
-        if sorted(label_name_to_id.keys()) == sorted(label_list):
-            logger.info(
-                f"The configuration of the model provided the following label correspondence: {label_name_to_id}. "
-                "Using it!"
-            )
-            label_to_id = {i: label_name_to_id[label_list[i]] for i in range(num_labels)}
-        else:
-            logger.warning(
-                "Your model seems to have been trained with labels, but they don't match the dataset: ",
-                f"model labels: {sorted(label_name_to_id.keys())}, dataset labels: {sorted(label_list)}."
-                "\nIgnoring the model labels as a result.",
-            )
-    elif data_args.task_name is None:
-        label_to_id = {v: i for i, v in enumerate(label_list)}
+    TO_BINARY = {
+        0: 1, # depressed
+        1: 0, # control 1 (not depressed)
+        2: 0, # control 2 (random)
+    }
 
     def preprocess_function(examples):
         # Tokenize the texts
-        texts = (
-            (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
-        )
-        result = tokenizer(*texts, padding="max_length", max_length=data_args.max_seq_length, truncation=True)
+        result = tokenizer(examples["text"], padding="max_length", max_length=data_args.max_seq_length, truncation=True)
 
-        if "label" in examples:
-            if label_to_id is not None:
-                # Map labels to IDs (not necessary for GLUE tasks)
-                result["labels"] = [label_to_id[l] for l in examples["label"]]
-            else:
-                # In all cases, rename the column to labels because the model will expect that.
-                result["labels"] = examples["label"]
+        result["labels"] = [TO_BINARY[sample] for sample in examples["depressed_label"]]
         return result
+    
+    Path(training_args.output_dir).mkdir(exist_ok=True, parents=True)
 
     processed_datasets = raw_datasets.map(
         preprocess_function, batched=True, remove_columns=raw_datasets["train"].column_names
     )
 
     train_dataset = processed_datasets["train"]
-    eval_dataset = processed_datasets["validation_matched" if data_args.task_name == "mnli" else "validation"]
+    eval_dataset = processed_datasets["validation"]
+    test_dataset = processed_datasets["test"]
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 3):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # Define a summary writer
-    has_tensorboard = is_tensorboard_available()
-    if has_tensorboard and jax.process_index() == 0:
-        try:
-            from flax.metrics.tensorboard import SummaryWriter
-
-            summary_writer = SummaryWriter(training_args.output_dir)
-            summary_writer.hparams({**training_args.to_dict(), **vars(model_args), **vars(data_args)})
-        except ImportError as ie:
-            has_tensorboard = False
-            logger.warning(
-                f"Unable to display metrics through TensorBoard because some package are not installed: {ie}"
-            )
-    else:
-        logger.warning(
-            "Unable to display metrics through TensorBoard because the package is not installed: "
-            "Please run pip install tensorboard to enable."
-        )
-
-    def write_train_metric(summary_writer, train_metrics, train_time, step):
-        summary_writer.scalar("train_time", train_time, step)
-
-        train_metrics = get_metrics(train_metrics)
-        for key, vals in train_metrics.items():
-            tag = f"train_{key}"
-            for i, val in enumerate(vals):
-                summary_writer.scalar(tag, val, step - len(vals) + i + 1)
-
-    def write_eval_metric(summary_writer, eval_metrics, step):
-        for metric_name, value in eval_metrics.items():
-            summary_writer.scalar(f"eval_{metric_name}", value, step)
-
     num_epochs = int(training_args.num_train_epochs)
     rng = jax.random.PRNGKey(training_args.seed)
     dropout_rngs = jax.random.split(rng, jax.local_device_count())
-
 
     gradient_accumulation_steps = training_args.gradient_accumulation_steps
     train_batch_size = int(training_args.per_device_train_batch_size) * jax.local_device_count() * gradient_accumulation_steps
@@ -581,10 +474,21 @@ def main():
 
     p_eval_step = jax.pmap(eval_step, axis_name="batch")
 
-    if data_args.task_name is not None:
-        metric = evaluate.load("glue", data_args.task_name)
-    else:
-        metric = evaluate.load("accuracy")
+    metric = evaluate.load("f1")
+    metric2 = evaluate.load("accuracy")
+    eval_metric_to_use = "f1"
+    best_eval_metrics = None
+    current_test_metric = None
+
+    use_wandb = is_wandb_available() and (data_args.report_to_wandb is not None)
+    if use_wandb:
+        import wandb
+        entity, project, name = data_args.report_to_wandb.split("/")
+        config = {**training_args.to_dict(), **vars(model_args), **vars(data_args)}
+
+        wandb.init(
+            project=project, entity=entity, name=name, config=config
+        )
 
     logger.info(f"===== Starting training ({num_epochs} epochs) =====")
     logger.info(f"  Instantaneous batch size per device = {training_args.per_device_train_batch_size}")
@@ -600,7 +504,6 @@ def main():
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (0/{num_epochs})", position=0)
     for epoch in epochs:
         train_start = time.time()
-        train_metrics = []
 
         # Create sampling rng
         rng, input_rng = jax.random.split(rng)
@@ -616,7 +519,6 @@ def main():
             ),
         ):
             state, train_metric, dropout_rngs = p_train_step(state, batch, dropout_rngs)
-            train_metrics.append(train_metric)
 
             cur_step = (epoch * steps_per_epoch) + (step + 1)
 
@@ -624,15 +526,13 @@ def main():
                 # Save metrics
                 train_metric = unreplicate(train_metric)
                 train_time += time.time() - train_start
-                if has_tensorboard and jax.process_index() == 0:
-                    write_train_metric(summary_writer, train_metrics, train_time, cur_step)
+                if use_wandb and jax.process_index() == 0:
+                    wandb.log({**train_metric, "step": cur_step, "epoch": epoch+step/steps_per_epoch})
 
                 epochs.write(
                     f"Step... ({cur_step}/{total_steps} | Training Loss: {train_metric['loss']}, Learning Rate:"
                     f" {train_metric['learning_rate']})"
                 )
-
-                train_metrics = []
 
             if (cur_step % training_args.eval_steps == 0 or cur_step % steps_per_epoch == 0) and cur_step > 0:
                 # evaluate
@@ -648,13 +548,46 @@ def main():
                         state, batch, min_device_batch=per_device_eval_batch_size
                     )
                     metric.add_batch(predictions=np.array(predictions), references=labels)
+                    metric2.add_batch(predictions=np.array(predictions), references=labels)
 
-                eval_metric = metric.compute()
+                eval_metric = {**metric.compute(average="macro"), **metric2.compute()}
 
                 logger.info(f"Step... ({cur_step}/{total_steps} | Eval metrics: {eval_metric})")
 
-                if has_tensorboard and jax.process_index() == 0:
-                    write_eval_metric(summary_writer, eval_metric, cur_step)
+                if use_wandb and jax.process_index() == 0:
+                    wandb.log({"eval": eval_metric, "step": cur_step, "epoch": epoch+step/steps_per_epoch})
+
+                if best_eval_metrics is None or eval_metric[eval_metric_to_use] > best_eval_metrics[eval_metric_to_use]:
+                    best_eval_metrics = eval_metric
+                    wandb.summary[f"best_eval_{eval_metric_to_use}"] = best_eval_metrics[eval_metric_to_use]
+
+                    if jax.process_index() == 0:
+                        print("Saving best_eval_checkpoints")
+                        params = jax.device_get(unreplicate(state.params))
+
+                        best_path = os.path.join(training_args.output_dir, "best")
+                        model.save_pretrained(best_path, params=params)
+                        tokenizer.save_pretrained(best_path)
+
+                    predict_loader = glue_eval_data_collator(test_dataset, eval_batch_size)
+                    for batch in tqdm(
+                        predict_loader,
+                        total=math.ceil(len(test_dataset) / eval_batch_size),
+                        desc="Testing ...",
+                        position=2,
+                    ):
+                        labels = batch.pop("labels")
+                        predictions = pad_shard_unpad(p_eval_step)(
+                            state, batch, min_device_batch=per_device_eval_batch_size
+                        )
+                        metric.add_batch(predictions=np.array(predictions), references=labels)
+                        metric2.add_batch(predictions=np.array(predictions), references=labels)
+
+                    predict_metric = {**metric.compute(average="macro"), **metric2.compute()}
+
+                    logger.info(f"Step... ({cur_step}/{total_steps} | Predict metrics: {predict_metric})")
+
+                    current_test_metric = predict_metric
 
             if (cur_step % training_args.save_steps == 0 and cur_step > 0) or (cur_step == total_steps):
                 # save checkpoint after each epoch and push checkpoint to the hub
@@ -669,7 +602,9 @@ def main():
     # save the eval metrics in json
     if jax.process_index() == 0:
         eval_metric = {f"eval_{metric_name}": value for metric_name, value in eval_metric.items()}
-        path = os.path.join(training_args.output_dir, "eval_results.json")
+        eval_metric["best"] = best_eval_metrics
+        eval_metric["predict"] = current_test_metric
+        path = os.path.join(training_args.output_dir, "results.json")
         with open(path, "w") as f:
             json.dump(eval_metric, f, indent=4, sort_keys=True)
 
