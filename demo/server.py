@@ -30,7 +30,6 @@ async def get_comments(username):
 def process_comments(comments):
     return "\n\n".join(f"Post from /r/{comment.subreddit}:\n{comment.text}" for comment in comments)
 
-device = "cuda:0"
 model = AutoModelForSequenceClassification.from_pretrained(model_path).to(device)
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 
@@ -38,23 +37,3 @@ def inference(text):
     tokens = tokenizer(text, return_tensors="pt").to(device)
     logits = model(**tokens)
     return functional.softmax(logits.logits)
-
-
-app = FastAPI()
-
-class User(BaseModel):
-    username: str
-
-@app.post("/get-posts")
-async def get_posts(user_id: User) -> List[Comment]:
-    username = user_id.username
-    return await get_comments(username)
-
-class Posts(BaseModel):
-    posts: List[Comment]
-
-@app.post("/predict")
-async def predict(posts: Posts):
-    text = process_comments(posts.posts)
-    result = inference(text).tolist()[0]
-    return result
