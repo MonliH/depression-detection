@@ -11,6 +11,7 @@ import {
   Input,
   InputGroup,
   InputLeftElement,
+  InputRightElement,
   Text,
   VStack,
 } from "@chakra-ui/react";
@@ -41,6 +42,11 @@ export default function Home() {
   const [formError, setFormError] = useState<string | null>(null);
   const search = useRef<elasticlunr.Index<Comment>>();
 
+  const [filterIdx, setFilterIdx] = useState<number[] | null>(null);
+  const [filteredIdxSet, setFilteredIdxSet] = useState<Set<number>>(
+    () => new Set()
+  );
+
   const getComments = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoadingComments(true);
@@ -60,6 +66,9 @@ export default function Home() {
       if (res.status === 404) {
         setFormError(data.detail ?? "Something went wrong");
       } else {
+        setSearchTerm("");
+        setFilterIdx(null);
+        setFilteredIdxSet(new Set());
         const commentsWithId = data.map((comment: any, i: number) => ({
           ...comment,
           id: i,
@@ -79,11 +88,8 @@ export default function Home() {
     })();
   };
 
-  const [filterIdx, setFilterIdx] = useState<number[] | null>(null);
-  const [filteredIdxSet, setFilteredIdxSet] = useState<Set<number>>(() => new Set());
   const predict = () => {
     const commentsToInclude = comments.filter((_, i) => !filteredIdxSet.has(i));
-    console.log(commentsToInclude);
     fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/predict`, {
       body: JSON.stringify({ posts: commentsToInclude }),
       method: "POST",
@@ -98,17 +104,43 @@ export default function Home() {
   };
 
   const update = useCallback((query: string) => {
-    if (query === "") {setFilterIdx(null); return;}
-    const indexes = search.current?.search(query, {
-        fields: {
-          subreddit: { boost: 2 },
-          text: { boost: 1 },
-        },
-        expand: true,
-      }).map((result) => Number.parseInt(result.ref, 10)) ?? [];
-      setFilterIdx(indexes);
+    if (query === "") {
+      setFilterIdx(null);
+      return;
+    }
+    const indexes =
+      search.current
+        ?.search(query, {
+          fields: {
+            subreddit: { boost: 2 },
+            text: { boost: 1 },
+          },
+          expand: true,
+        })
+        .map((result) => Number.parseInt(result.ref, 10)) ?? [];
+    setFilterIdx(indexes);
   }, []);
   const debounced = useCallback(debounce(update, 500), []);
+
+  const toggleVisibleComments = () => {
+    if (filterIdx === null) {
+      // toggle all visible on if there are more visible than hidden
+      const turnOn = comments.length - filteredIdxSet.size < filteredIdxSet.size;
+      const newSet = turnOn ? new Set<number>() : new Set<number>(Array.from({ length: comments.length }, (_, i) => i));
+      setFilteredIdxSet(newSet);
+    } else {
+      const numSearchedCommentsDisabled = filterIdx.filter((i) => filteredIdxSet.has(i)).length;
+      const totalSearched = filterIdx.length;
+      const turnOn = numSearchedCommentsDisabled > totalSearched / 2;
+      const newSet = new Set<number>(filteredIdxSet);
+      if (turnOn) {
+        filterIdx.forEach((i) => newSet.delete(i));
+      } else {
+        filterIdx.forEach((i) => newSet.add(i));
+      }
+      setFilteredIdxSet(newSet);
+    }
+  }
 
   useEffect(() => {
     debounced(searchTerm);
@@ -178,22 +210,27 @@ export default function Home() {
                 <Text fontSize="xl" fontWeight="bold">
                   Comments of {currentUser ? `/u/${currentUser}` : "..."}
                 </Text>
-                <InputGroup flexGrow={0}>
-                  <InputLeftElement pointerEvents={"none"}>
-                    <Search />
-                  </InputLeftElement>
-                  <Input
-                    type="text"
-                    placeholder="Search"
-                    onChange={(e) => {
-                      setSearchTerm(e.target.value);
-                    }}
-                    value={searchTerm}
-                  />
-                </InputGroup>
-                <Box flexGrow={1} w="100%" overflow="scroll" pb="4">
+                <HStack w="100%">
+                  <InputGroup>
+                    <InputLeftElement pointerEvents={"none"}>
+                      <Search />
+                    </InputLeftElement>
+                    <Input
+                      type="text"
+                      placeholder="Search"
+                      onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                      }}
+                      value={searchTerm}
+                    />
+                  </InputGroup>
+                  <Button onClick={toggleVisibleComments}>Toggle Hide</Button>
+                </HStack>
+                <Box flexGrow={1} maxWidth="50vw" overflow="scroll" pb="4">
                   <VStack alignItems="baseline">
-                    {((filterIdx?.map((index) => comments[index]))??comments).map((comment, i) => (
+                    {(
+                      filterIdx?.map((index) => [comments[index], index] as [Comment, number]) ?? comments.map((comment, i) => [comment, i]as [Comment, number])
+                    ).map(([comment, i]: [Comment, number], _) => (
                       <Box
                         key={i}
                         p="3"
@@ -203,16 +240,21 @@ export default function Home() {
                         position={"relative"}
                         w="100%"
                         color={filteredIdxSet.has(i) ? "gray.400" : "black"}
-                        _hover={{ borderColor: "gray.500", _after: {
-                          // x emoji if not in filtered set otherwise check emoji
-                          content: `""`,
-                          bgImage: filteredIdxSet.has(i) ? "url('/visible.svg')" : "url('/hidden.svg')",
-                          position: "absolute",
-                          right: "10px",
-                          top: "10px",
-                          width: "24px",
-                          height: "24px",
-                        } }}
+                        _hover={{
+                          borderColor: "gray.500",
+                          _after: {
+                            // x emoji if not in filtered set otherwise check emoji
+                            content: `""`,
+                            bgImage: filteredIdxSet.has(i)
+                              ? "url('/visible.svg')"
+                              : "url('/hidden.svg')",
+                            position: "absolute",
+                            right: "10px",
+                            top: "10px",
+                            width: "24px",
+                            height: "24px",
+                          },
+                        }}
                         onClick={() => {
                           const newSet = new Set(filteredIdxSet);
                           if (filteredIdxSet.has(i)) {
@@ -233,7 +275,7 @@ export default function Home() {
                 </Box>
               </VStack>
               <Box p="5" h="100%" flexGrow={1} flexBasis={0} w="100%">
-                <Button onClick={predict} mb="4">
+                <Button onClick={predict} mb="4" colorScheme={"green"}>
                   Predict
                 </Button>
                 {confidence && (
