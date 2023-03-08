@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from torch.nn import functional
+import torch
 from typing import List
-from dataclasses import dataclass
 import os
 import asyncpraw
 import dotenv
@@ -39,7 +39,8 @@ tokenizer = AutoTokenizer.from_pretrained(model_path)
 
 def inference(text):
     tokens = tokenizer(text, return_tensors="pt", max_length=4096, truncation=True).to(device)
-    logits = model(**tokens)
+    with torch.no_grad():
+        logits = model(**tokens)
     return functional.softmax(logits.logits)
 
 
