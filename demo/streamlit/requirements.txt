@@ -1,0 +1,6 @@
+transformers
+torch
+praw
+python-dotenv
+streamlit=1.19.0
+pandas

@@ -6,3 +6,4 @@ checkpoints/
 wandb/
 google-cloud-sdk/
 google-cloud-cli-419.0.0-linux-x86_64.tar.gz
+__pycache__/
