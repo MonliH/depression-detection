@@ -3,8 +3,21 @@ datasets.disable_caching()
 ds = datasets.load_from_disk("/mnt/disks/persist/user_comments", keep_in_memory=True)
 ds = ds.filter(lambda x: len(x["posts"]) > 0, num_proc=64, keep_in_memory=True)
 
+# fmt: off
+subreddits_to_remove = set([
+    "Anxiety", "anxietyhelp", "anxietysuccess", "anxietysupporters", "CPTSD", "dpdr",
+    "HealthAnxiety", "OCD", "PanicAttack", "Phobia", "pureo", "ptsd", "socialanxiety",
+    "OCD", "depression", "depressed", "depression_help", "depressionregiments", 
+    "DepressionJournals", "DepressionRecovery", "dysthymia", "AnxietyDepression", 
+    "adhd_anxiety", "ADHD"
+])
+# fmt: on
+
 def format_post_as_text(posts):
-    return "\n\n".join(f"Post from /r/{post['subreddit']}:\n{post['body']}" for post in posts)
+    return "\n\n".join(
+        f"Post from /r/{post['subreddit']}:\n{post['body']}" 
+        for post in posts if post["subreddit"] not in subreddits_to_remove
+    )
 
 def add_text_format(batch):
     batch["text"] = [format_post_as_text(sample) for sample in batch["posts"]]
