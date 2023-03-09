@@ -371,9 +371,13 @@ def main():
     )
     model = FlaxAutoModelForSequenceClassification.from_pretrained(
         model_args.model_name_or_path,
+        dtype=jnp.dtype("bfloat16") if training_args.bf16 else jnp.dtype("float32"),
         config=config,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+    if training_args.bf16:
+        print("Casting model params to bf16")
+        model.params = model.to_bf16(model.params)
 
     TO_BINARY = {
         0: 1, # depressed
@@ -383,15 +387,29 @@ def main():
 
     def preprocess_function(examples):
         # Tokenize the texts
-        result = tokenizer(examples["text"], padding="max_length", max_length=data_args.max_seq_length, truncation=True)
+        result = tokenizer(examples["text"], max_length=data_args.max_seq_length, return_overflowing_tokens=True)
+        labels = []
+        for input_ids, attention_mask, segment in zip(result["input_ids"], result["attention_mask"], result["overflow_to_sample_mapping"]):
+            labels.append(TO_BINARY[examples["depressed_label"][segment]])
+            if len(input_ids) < data_args.max_seq_length:
+                additional_needed = data_args.max_seq_length - len(input_ids)
+                input_ids.extend([tokenizer.pad_token_id]*additional_needed)
+                attention_mask.extend([0]*additional_needed)
 
-        result["labels"] = [TO_BINARY[sample] for sample in examples["depressed_label"]]
+        result["labels"] = labels
+        del result["overflow_to_sample_mapping"]
         return result
     
     Path(training_args.output_dir).mkdir(exist_ok=True, parents=True)
 
+    # base_path = f"/mnt/disks/persist/hf_cache/ds_process_cache_{model_args.model_name_or_path.replace('/', '_')}"
     processed_datasets = raw_datasets.map(
-        preprocess_function, batched=True, remove_columns=raw_datasets["train"].column_names
+        preprocess_function, batched=True, remove_columns=raw_datasets["train"].column_names,
+        # cache_file_names={
+        #     "train": f"{base_path}/train",
+        #     "validation": f"{base_path}/validation",
+        #     "test": f"{base_path}/test",
+        # }
     )
 
     train_dataset = processed_datasets["train"]
@@ -522,17 +540,18 @@ def main():
 
             cur_step = (epoch * steps_per_epoch) + (step + 1)
 
-            if cur_step % training_args.logging_steps == 0 and cur_step > 0:
-                # Save metrics
-                train_metric = unreplicate(train_metric)
-                train_time += time.time() - train_start
-                if use_wandb and jax.process_index() == 0:
-                    wandb.log({**train_metric, "step": cur_step, "epoch": epoch+step/steps_per_epoch})
+            # if cur_step % training_args.logging_steps == 0 and cur_step > 0:
+            #     # Save metrics
+            #     train_metric = unreplicate(train_metric)
+            #     train_time += time.time() - train_start
+            #     if use_wandb and jax.process_index() == 0:
+            #         new_train_metric = get_metrics([train_metric])
+            #         wandb.log({**new_train_metric, "step": cur_step, "epoch": epoch+step/steps_per_epoch})
 
-                epochs.write(
-                    f"Step... ({cur_step}/{total_steps} | Training Loss: {train_metric['loss']}, Learning Rate:"
-                    f" {train_metric['learning_rate']})"
-                )
+            #     epochs.write(
+            #         f"Step... ({cur_step}/{total_steps} | Training Loss: {train_metric['loss']}, Learning Rate:"
+            #         f" {train_metric['learning_rate']})"
+            #     )
 
             if (cur_step % training_args.eval_steps == 0 or cur_step % steps_per_epoch == 0) and cur_step > 0:
                 # evaluate

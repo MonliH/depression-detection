@@ -1,11 +1,13 @@
 python3 ml/train.py \
   --model_name_or_path google/bigbird-roberta-large \
   --max_seq_length 4096 \
-  --learning_rate 2e-5 \
-  --num_train_epochs 3 \
+  --learning_rate 1e-5 \
+  --num_train_epochs 5 \
+  --bf16 \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 8 \
   --eval_steps 100 \
+  --logging_steps 1 \
   --load_dataset_from_disk /mnt/disks/persist/user_comments_text \
   --report_to_wandb jonatli/depression/bigbird-roberta-large \
   --output_dir ./checkpoints/bigbird-roberta-large
