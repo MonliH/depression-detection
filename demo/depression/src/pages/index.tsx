@@ -13,6 +13,7 @@ import {
   InputLeftElement,
   InputRightElement,
   Text,
+  Tooltip,
   VStack,
 } from "@chakra-ui/react";
 import Head from "next/head";
@@ -26,6 +27,35 @@ interface Comment {
   subreddit: string;
   id: number;
 }
+
+const SUBREDDITS_RELATED_TO_DEPRESSION = new Set([
+  "Anxiety",
+  "anxietyhelp",
+  "anxietysuccess",
+  "anxietysupporters",
+  "CPTSD",
+  "dpdr",
+  "HealthAnxiety",
+  "OCD",
+  "PanicAttack",
+  "Phobia",
+  "pureo",
+  "ptsd",
+  "socialanxiety",
+  "OCD",
+  "depression",
+  "depressed",
+  "depression_help",
+  "depressionregiments",
+  "DepressionJournals",
+  "DepressionRecovery",
+  "dysthymia",
+  "AnxietyDepression",
+  "adhd_anxiety",
+  "ADHD",
+  "AdultADHDSupportGroup",
+  "ashhd",
+].map((s) => s.toLowerCase()));
 
 function round(num: number) {
   return Math.round((num + Number.EPSILON) * 100) / 100;
@@ -88,7 +118,10 @@ export default function Home() {
     })();
   };
 
+  const [predicting, setPredicting] = useState(false);
+
   const predict = () => {
+    setPredicting(true);
     const commentsToInclude = comments.filter((_, i) => !filteredIdxSet.has(i));
     fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/predict`, {
       body: JSON.stringify({ posts: commentsToInclude }),
@@ -100,6 +133,11 @@ export default function Home() {
       .then((res) => res.json())
       .then((data) => {
         setConfidence(data);
+        setPredicting(false);
+      })
+      .catch(() => {
+        setConfidence(null);
+        setPredicting(false);
       });
   };
 
@@ -125,11 +163,16 @@ export default function Home() {
   const toggleVisibleComments = () => {
     if (filterIdx === null) {
       // toggle all visible on if there are more visible than hidden
-      const turnOn = comments.length - filteredIdxSet.size < filteredIdxSet.size;
-      const newSet = turnOn ? new Set<number>() : new Set<number>(Array.from({ length: comments.length }, (_, i) => i));
+      const turnOn =
+        comments.length - filteredIdxSet.size < filteredIdxSet.size;
+      const newSet = turnOn
+        ? new Set<number>()
+        : new Set<number>(Array.from({ length: comments.length }, (_, i) => i));
       setFilteredIdxSet(newSet);
     } else {
-      const numSearchedCommentsDisabled = filterIdx.filter((i) => filteredIdxSet.has(i)).length;
+      const numSearchedCommentsDisabled = filterIdx.filter((i) =>
+        filteredIdxSet.has(i)
+      ).length;
       const totalSearched = filterIdx.length;
       const turnOn = numSearchedCommentsDisabled > totalSearched / 2;
       const newSet = new Set<number>(filteredIdxSet);
@@ -140,6 +183,30 @@ export default function Home() {
       }
       setFilteredIdxSet(newSet);
     }
+  };
+
+  const toggleDepressionSubreddits = () => {
+    const newSet = new Set<number>(filteredIdxSet);
+    const commentIdsInDepressionSubreddits = comments.map((comment, i) => {
+      if (SUBREDDITS_RELATED_TO_DEPRESSION.has(comment.subreddit.toLowerCase())) {
+        return i;
+      }
+      return null;
+    }).filter((i) => i !== null) as number[];
+
+    const numDepressionSubredditsDisabled = commentIdsInDepressionSubreddits.filter(
+      (i) => newSet.has(i)
+    ).length;
+
+    const totalDepressionSubreddits = commentIdsInDepressionSubreddits.length;
+    const turnOn = numDepressionSubredditsDisabled > totalDepressionSubreddits / 2;
+    if (turnOn) {
+      commentIdsInDepressionSubreddits.forEach((i) => newSet.delete(i));
+    } else {
+      commentIdsInDepressionSubreddits.forEach((i) => newSet.add(i));
+    }
+
+    setFilteredIdxSet(newSet);
   }
 
   useEffect(() => {
@@ -207,9 +274,17 @@ export default function Home() {
                 borderRightColor="gray.200"
                 pr="5"
               >
-                <Text fontSize="xl" fontWeight="bold">
-                  Comments of {currentUser ? `/u/${currentUser}` : "..."}
-                </Text>
+                <HStack>
+                  <Text fontSize="xl" fontWeight="bold" mr="2">
+                    Comments of {currentUser ? `/u/${currentUser}` : "..."}
+                  </Text>
+                  <Tooltip
+                    hasArrow
+                    label="Toggle subreddits related to depression (to test early depression detection)."
+                  >
+                    <Button size="xs" colorScheme="green" onClick={toggleDepressionSubreddits}>Toggle Subreddits</Button>
+                  </Tooltip>
+                </HStack>
                 <HStack w="100%">
                   <InputGroup>
                     <InputLeftElement pointerEvents={"none"}>
@@ -229,7 +304,12 @@ export default function Home() {
                 <Box flexGrow={1} maxWidth="50vw" overflow="scroll" pb="4">
                   <VStack alignItems="baseline">
                     {(
-                      filterIdx?.map((index) => [comments[index], index] as [Comment, number]) ?? comments.map((comment, i) => [comment, i]as [Comment, number])
+                      filterIdx?.map(
+                        (index) => [comments[index], index] as [Comment, number]
+                      ) ??
+                      comments.map(
+                        (comment, i) => [comment, i] as [Comment, number]
+                      )
                     ).map(([comment, i]: [Comment, number], _) => (
                       <Box
                         key={i}
@@ -275,7 +355,14 @@ export default function Home() {
                 </Box>
               </VStack>
               <Box p="5" h="100%" flexGrow={1} flexBasis={0} w="100%">
-                <Button onClick={predict} mb="4" colorScheme={"green"}>
+                <Text fontSize="sm" mb="2">Predict using <b>{comments.length - filteredIdxSet.size}</b> comments:</Text>
+                <Button
+                  onClick={predict}
+                  mb="4"
+                  colorScheme={"green"}
+                  disabled={predicting}
+                  isLoading={predicting}
+                >
                   Predict
                 </Button>
                 {confidence && (
