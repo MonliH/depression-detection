@@ -9,14 +9,16 @@ subreddits_to_remove = set(sr.lower() for sr in [
     "HealthAnxiety", "OCD", "PanicAttack", "Phobia", "pureo", "ptsd", "socialanxiety",
     "OCD", "depression", "depressed", "depression_help", "depressionregiments", 
     "DepressionJournals", "DepressionRecovery", "dysthymia", "AnxietyDepression", 
-    "adhd_anxiety", "ADHD", "AdultADHDSupportGroup", "ashhd"
+    "adhd_anxiety", "ADHD", "AdultADHDSupportGroup", "ashhd", "SuicideWatch"
 ])
 # fmt: on
 
 def format_post_as_text(posts):
     return "\n\n".join(
         f"Post from /r/{post['subreddit']}:\n{post['body']}" 
-        for post in posts if post["subreddit"].lower() not in subreddits_to_remove
+        for post in posts if (
+            post["subreddit"].lower() not in subreddits_to_remove and "depression" not in post["subreddit"] and " depression " not in post["body"].lower() and " depressed " not in post["body"].lower()
+        )
     )
 
 def add_text_format(batch):
@@ -33,4 +35,4 @@ ds_dict = datasets.DatasetDict({
     "validation": test_validation["train"],
     "test": test_validation["test"]
 })
-ds_dict.save_to_disk("/mnt/disks/persist/user_comments_text_filtered")
+ds_dict.save_to_disk("/mnt/disks/persist/user_comments_text_filtered_2")

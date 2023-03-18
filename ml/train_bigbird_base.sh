@@ -5,7 +5,7 @@ python3 ml/train.py \
   --num_train_epochs 5 \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 8 \
-  --eval_steps 250 \
-  --load_dataset_from_disk /mnt/disks/persist/user_comments_text_filtered \
-  --report_to_wandb jonatli/depression/bigbird-roberta-base-filtered-more-data \
-  --output_dir ./checkpoints/bigbird-roberta-base-filtered-more-data
+  --eval_steps 1000 \
+  --load_dataset_from_disk /mnt/disks/persist/user_comments_text_filtered_2 \
+  --report_to_wandb jonatli/depression/bigbird-roberta-base-filtered-more-data-2 \
+  --output_dir ./checkpoints/bigbird-roberta-base-filtered-more-data-2
