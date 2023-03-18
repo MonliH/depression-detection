@@ -4,6 +4,9 @@
   margin: 0;
 }
 
-html,
 body {
+  overflow:scroll;
+}
+html {
+  overflow:hidden;
 }
